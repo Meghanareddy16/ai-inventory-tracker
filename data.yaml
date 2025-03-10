@@ -1,6 +1,6 @@
-train: ../train/images
-val: ../valid/images
-test: ../test/images
+train: /Users/meghanareddymacha/Downloads/dataset/train/images
+val: /Users/meghanareddymacha/Downloads/dataset/valid/images
+test: /Users/meghanareddymacha/Downloads/dataset/test/images
 
 nc: 2
 names: ['Empty_shelf', 'full_shelf']

@@ -1,32 +1,64 @@
+import os
 import cv2
 import numpy as np
-import os
+from ultralytics import YOLO
+import firebase_admin
+from firebase_admin import credentials, firestore
+from dotenv import load_dotenv
 
-# Set the dataset folder path
-image_folder = "/Users/meghanareddymacha/Downloads/dataset/train/images"  # Change this path if needed
+# ✅ Load environment variables
+load_dotenv()
+firebase_cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
-# Function to calculate image brightness
-def calculate_brightness(image_path):
-    img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)  # Convert to grayscale
-    return np.mean(img)  # Get average pixel brightness
+# ✅ Initialize Firebase
+if firebase_cred_path and not firebase_admin._apps:
+    cred = credentials.Certificate(firebase_cred_path)
+    firebase_admin.initialize_app(cred)
+    db = firestore.client()
+else:
+    print("❌ Firebase Initialization Failed: Missing Credentials")
+    db = None  # Prevent further errors
 
-# Scan images and calculate brightness
-brightness_levels = []
-for img_name in os.listdir(image_folder):
-    img_path = os.path.join(image_folder, img_name)
-    if img_name.endswith((".jpg", ".png", ".jpeg")):
-        brightness = calculate_brightness(img_path)
-        brightness_levels.append((img_name, brightness))
+# ✅ Load YOLOv8 Model
+model_path = "runs/detect/train8/weights/best.pt"
+model = YOLO(model_path)
 
-# Sort by brightness (low to high)
-brightness_levels.sort(key=lambda x: x[1])
+# ✅ Define Image Processing Folder
+image_folder = "dataset/test/"
+processed_files = set()
 
-# Print the lowest brightness images
-print("\n📉 Low-Brightness Images (Possible Low-Light Images):")
-for img_name, brightness in brightness_levels[:5]:  # Show 5 lowest brightness images
-    print(f"{img_name}: Brightness = {brightness:.2f}")
+def detect_empty_shelves(image_path):
+    """Run YOLOv8 detection to identify empty shelves."""
+    results = model(image_path)
+    detections = []
 
-# Print the highest brightness images for comparison
-print("\n☀️ High-Brightness Images (Well-Lit Samples):")
-for img_name, brightness in brightness_levels[-5:]:  # Show 5 highest brightness images
-    print(f"{img_name}: Brightness = {brightness:.2f}")
+    for r in results:
+        if r.boxes is not None:
+            for box in r.boxes:
+                cls_id = int(box.cls[0])
+                cls_name = r.names.get(cls_id, "Unknown")  # Ensure no key errors
+                confidence = float(box.conf[0])  # Get confidence score
+                if confidence > 0.5:  # Filter low-confidence detections
+                    detections.append(cls_name)
+    
+    return detections
+
+# ✅ Process Images in the Folder
+for filename in os.listdir(image_folder):
+    if filename.endswith(('.jpg', '.png')) and filename not in processed_files:
+        image_path = os.path.join(image_folder, filename)
+        detections = detect_empty_shelves(image_path)
+        
+        if "empty_shelf" in detections:
+            print(f"⚠ Empty shelves detected in {filename}! Restocking required.")
+            doc_id = os.path.basename(image_path).split('.')[0]  # Use filename as ID
+            doc_ref = db.collection("inventory").document(doc_id)
+            doc_ref.set({
+                "image_name": filename,
+                "detections": detections,
+                "timestamp": firestore.SERVER_TIMESTAMP
+            })
+        else:
+            print(f"✅ No empty shelves detected in {filename}.")
+        
+        processed_files.add(filename)
